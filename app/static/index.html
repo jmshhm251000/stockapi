@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>Financial Analysis Platform</title>
+  <!-- TradingView 위젯 -->
+  <script src="https://s3.tradingview.com/tv.js"></script>
+  <link rel="stylesheet" href="/static/css/main.css"/>
+</head>
+<body>
+
+  <div class="center-container">
+    <!-- 초기 중앙 타이틀 -->
+    <h1 class="main-title">Today's stock?</h1>
+
+    <!-- 검색 폼 + 드롭다운 -->
+    <form id="search-form" class="search-wrapper">
+      <input
+        id="search-input"
+        class="search-input"
+        type="text"
+        placeholder="Ask away"
+        autocomplete="off"
+      />
+      <button type="submit" class="search-btn">
+        <svg viewBox="0 0 24 24"><path d="M10 17l5-5-5-5v10z"/></svg>
+      </button>
+      <ul id="suggestions" class="suggestions-list"></ul>
+    </form>
+
+    <!-- 검색 결과: 회사명(티커) -->
+    <div id="result-container" class="result-container"></div>
+    <!-- TradingView 차트가 그려질 곳 -->
+    <div id="tv_chart" class="chart-container"></div>
+    <!-- SEC picker -->
+    <div id="sec-docs-container" class="sec-docs-container"></div>
+  </div>
+
+  <script src="/static/js/main.js"></script>
+</body>
+</html>
