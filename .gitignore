@@ -5,3 +5,4 @@ app/api/__pycache__/
 chroma_db/
 data/
 llm.py
+.vscode/
