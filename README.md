@@ -1,1 +1,1 @@
-"# stockapi" 
+# stockapi
