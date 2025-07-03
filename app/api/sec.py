@@ -1,7 +1,7 @@
 from fastapi import APIRouter, status, Query
 from fastapi.responses import JSONResponse
 from typing import List, Dict
-from app.services.sec_url_service import update_company_tickers_json, find_cik, SECFilingClient
+from app.services.sec.sec_url import update_company_tickers_json, find_cik, SECFilingClient
 
 router = APIRouter()
 

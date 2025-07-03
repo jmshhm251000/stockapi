@@ -17,6 +17,9 @@ class Settings(BaseSettings):
 
     YFINANCE_TIMEOUT: int = int(os.getenv("YFINANCE_TIMEOUT", "5"))
 
+    sec_cache_dir: str = os.path.join(os.getcwd(), os.getenv("SEC_CACHE_DIR"))
+    sec_vector_db: str = os.path.join(os.getcwd(), os.getenv("SEC_VECTOR_DB"))
+
     class Config:
         env_file = ".env"
 

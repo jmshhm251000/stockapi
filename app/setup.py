@@ -31,7 +31,7 @@ def process_row_sync_csv(row, sllm):
     metadata["summary"] = summary
 
     return Document(
-        text=row.chapter_content,
+        text=row.content,
         metadata=metadata
     )
 
@@ -44,6 +44,8 @@ def process_sync():
     letter_df = pd.read_csv("data/special letter from buffett.csv")
 
     docs = []
+    
+    sub_llm = Ollama(model="llama3.2", request_timeout=120.0, json_mode=True, ollama_additional_kwargs={ "max_tokens": 4096 })
 
     for doc in tqdm(documents, desc="Summarizing PDF Documents"):
         prompt = (
@@ -55,7 +57,6 @@ def process_sync():
         doc.metadata["summary"] = summary
         doc.metadata["title"] = "An Owner's Manual By Warren E. Buffett"
 
-    sub_llm = Ollama(model="llama3.2", request_timeout=120.0, json_mode=True, ollama_additional_kwargs={ "max_tokens": 4096 })
 
     for current_df in [df, letter_df]:
         with ThreadPoolExecutor(max_workers=16) as executor:
@@ -68,9 +69,9 @@ def process_sync():
     return docs
 
 
-def construct_db():
+def construct_db_llm():
     embedding_model = OllamaEmbedding(model_name="nomic-embed-text", base_url="http://localhost:11434")
-    chroma_client = chromadb.PersistentClient(path=os.path.join(os.getcwd(), "chroma_db"))
+    chroma_client = chromadb.PersistentClient(path=os.path.join(os.getcwd(), "buffett_db"))
     chroma_collection = chroma_client.get_or_create_collection(name="Warren_Buffett")
 
     vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
@@ -93,11 +94,9 @@ def construct_db():
             ids=ids
         )
 
-    return embedding_model, VectorStoreIndex.from_vector_store(embed_model=embedding_model, vector_store=vector_store)
+    index = VectorStoreIndex.from_vector_store(embed_model=embedding_model, vector_store=vector_store)
 
-
-def construct_llm(index: VectorStoreIndex):
-    wb_retriever = VectorIndexRetriever(index=index, similarity_top_k=5)
+    retriever = VectorIndexRetriever(index=index, similarity_top_k=5)
 
     llm = LlamaCPP(
         model_path="D:\\Dev\\Cpp\\my_app\\model\\DeepSeek-R1-Distill-Llama-8B-Q4_K_M.gguf",
@@ -114,4 +113,4 @@ def construct_llm(index: VectorStoreIndex):
         verbose=False,
     )
 
-    return wb_retriever, llm
+    return embedding_model, retriever, llm

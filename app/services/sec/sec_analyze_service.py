@@ -8,7 +8,7 @@ from llama_index.core.node_parser import TokenTextSplitter
 from llama_index.core import VectorStoreIndex
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core import Document
-from .sec_url_service import find_cik, SECFilingClient
+from .sec_url import find_cik, SECFilingClient
 import asyncio
 
 
