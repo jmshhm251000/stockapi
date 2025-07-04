@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 from typing import List, Dict
 from app.services.sec.sec_url import update_company_tickers_json, find_cik, SECFilingClient
 
+
 router = APIRouter()
 
 
@@ -28,7 +29,7 @@ async def get_cik(ticker: str):
 @router.get("/sec_doc_urls")
 def get_sec_doc_urls(
     ticker: str,
-    top: int = Query(5, ge=1, le=10, description="How many top filings to consider")
+    top: int = Query(4, ge=1, le=10, description="How many top filings to consider")
 ):
     cik, success = find_cik(ticker)
     if not success:

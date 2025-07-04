@@ -3,6 +3,7 @@ import requests
 import json
 import os
 import pandas as pd
+from .sec_utils import find_cik
 
 
 headers = settings.headers
@@ -14,10 +15,10 @@ class SECFilingClient:
         if not success:
             raise ValueError(cik)
         self.cik = cik
-        self.filing_metadata = pd.DataFrame()
+        self.filing_metadata = self._fetch_metadata()
 
 
-    def fetch_metadata(self, top_doc: int) -> tuple[int | str, int]:
+    def _fetch_metadata(self, top_doc: int = 4) -> tuple[int | str, int]:
         try:
             url = f'https://data.sec.gov/submissions/CIK{self.cik}.json'
             response = requests.get(url, headers=headers, timeout=10)
@@ -29,13 +30,12 @@ class SECFilingClient:
             df = df.sort_values(by=['form', 'filingDate'], ascending=[True, False])
             df = df.groupby('form').head(top_doc).reset_index(drop=True)
 
-            self.filing_metadata = df
             return df, 1
         except requests.exceptions.RequestException as e:
             return f"Failed to fetch filings metadata for CIK {self.cik}: {e}", 0
 
 
-    def get_metadata(self, index: int) -> tuple[str, str, str, str]:
+    def _get_metadata(self, index: int) -> tuple[str, str, str, str]:
         if self.filing_metadata.empty:
             raise ValueError("filing_metadata is empty. Fetch it first.")
 
@@ -71,39 +71,3 @@ def update_company_tickers_json():
         return local_filename, 1
     except requests.exceptions.RequestException as e:
         return f"Failed to update company_tickers.json: {e}", 0
-    
-
-def load_ticker_json():
-    filepath = os.path.join("app", "data", "company_tickers.json")
-
-    if not os.path.exists(filepath):
-        raise FileNotFoundError(
-            "company_tickers.json file not found. Please run update first."
-        )
-
-    df = pd.read_json(filepath, orient="index")
-
-    return df
-
-
-def find_cik(ticker: str) -> str:
-    """Find and return the CIK number for the given ticker symbol from saved SEC JSON"""
-    try:
-        df = load_ticker_json()
-
-        df['cik_str'] = df['cik_str'].astype(str).str.zfill(10)
-
-        ticker = ticker.upper()
-
-        result = df[df["ticker"] == ticker]["cik_str"]
-
-        if not result.empty:
-            CIK = str(result.iloc[0])
-            return CIK, 1
-        else:
-            error = f"Ticker '{ticker}' not found in the data."
-            return error, 0
-
-    except (ValueError, KeyError) as e:
-        error = f"Error loading or parsing company_tickers.json: {e}"
-        return error, 0

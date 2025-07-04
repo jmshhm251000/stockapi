@@ -8,34 +8,43 @@ from llama_index.core.node_parser import TokenTextSplitter
 from llama_index.core import VectorStoreIndex
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core import Document
-from .sec_url import find_cik, SECFilingClient
+from .sec_url import SECFilingClient
+from app.services.sec.sec_downloader import SecDownloader
+from app.services.sec.sec_embedder   import SecEmbedder
 import asyncio
 
 
 headers = settings.headers
 
 
-class SECAnalyzingClient(SECFilingClient):
-    def __init__(self, ticker: str, embedding):
-        cik, success = find_cik(ticker)
-        if not success:
-            raise ValueError(cik)
-        self.ticker = ticker
-        self.cik = cik
-        self.filing_metadata = pd.DataFrame()
-        self.filings = []
+class SECParsingClient(SECFilingClient):
+    _locks: dict[str, asyncio.Lock] = {}
+
+    def __init__(self, ticker: str, downloader: SecDownloader, embedder: SecEmbedder):
+        super().__init__(ticker=ticker)
+        self.downloader = downloader
+        self.embedder = embedder
         self.chunk_text_df = pd.DataFrame()
         self.text_df = pd.DataFrame()
         self.table_df = pd.DataFrame()
-        self.embedding = embedding
         
     
-    def fill_filings(self):
+    async def _ingest_if_needed(self):
+        if self.embedder._col(self.cik).count() > 0:
+            return
+
+        lock = self._locks.setdefault(self.cik, asyncio.Lock())
+        async with lock:
+            # TODO - continue
+            return
+        
+
+    def _fill_filings(self):
         if self.filing_metadata.empty:
             raise ValueError("filing_metadata is empty. Fetch it first.")
         
         for i in tqdm(range(len(self.filing_metadata)), desc='Fetching Filings'):
-            acc_no, doc, form, date = self.get_metadata(i)
+            acc_no, doc, form, date = self._get_metadata(i)
             self.filings.append({
                 "index": i,
                 "form": form,
@@ -61,7 +70,7 @@ class SECAnalyzingClient(SECFilingClient):
                     return prev_div.get_text(strip=True)
         return "No Title Found"
 
-    async def clean_data(self, html: str, company_name: str, form_type: str, report_date: str, chunk_size=512, chunk_overlap=50) -> pd.DataFrame:
+    async def clean_data(self, html: str, metadata: dict, chunk_size=512, chunk_overlap=50) -> pd.DataFrame:
         soup = BeautifulSoup(html, "html.parser")
         tables = soup.find_all("table")
 
@@ -73,9 +82,9 @@ class SECAnalyzingClient(SECFilingClient):
             for x, tr in enumerate(table.find_all("tr")):
                 for y, data in enumerate(tr.find_all("td")):
                     structured_tables.append({
-                        "company_name": company_name,
-                        "form_type": form_type,
-                        "date": report_date,
+                        "company_name": metadata["company_name"],
+                        "form_type": metadata["form_type"],
+                        "date": metadata["report_date"],
                         "table_number": i,
                         "table_title": table_title,
                         "row": x,
@@ -101,9 +110,9 @@ class SECAnalyzingClient(SECFilingClient):
                     texts = " ".join(texts_list).strip()
                     if texts:  # Ensure texts are not empty
                         pages_and_texts.append({
-                            "company_name": company_name,
-                            "form_type": form_type,
-                            "date": report_date,
+                            "company_name": metadata["company_name"],
+                            "form_type": metadata["form_type"],
+                            "date": metadata["report_date"],
                             "page_number": page_number,
                             "page_char_count": len(texts),
                             "page_word_count": len(texts.split()),
@@ -127,9 +136,9 @@ class SECAnalyzingClient(SECFilingClient):
         if current_page:
             texts = " ".join(await asyncio.gather(*text_cleaning_tasks)).strip()
             pages_and_texts.append({
-                "company_name": company_name,
-                "form_type": form_type,
-                "date": report_date,
+                "company_name": metadata["company_name"],
+                "form_type": metadata["form_type"],
+                "date": metadata["report_date"],
                 "page_number": page_number,
                 "page_char_count": len(texts),
                 "page_word_count": len(texts.split()),
@@ -159,9 +168,9 @@ class SECAnalyzingClient(SECFilingClient):
         for row, chunks in zip(text_df.iterrows(), chunk_results):
             for chunk in chunks:
                 split_content.append({
-                    "company_name": company_name,
-                    "form_type": form_type,
-                    "date": report_date,
+                    "company_name": metadata["company_name"],
+                    "form_type": metadata["form_type"],
+                    "date": metadata["report_date"],
                     "page_number": row[1]["page_number"],
                     "chunk_char_count": len(chunk),
                     "chunk_word_count": len(chunk.split()),
@@ -186,7 +195,12 @@ class SECAnalyzingClient(SECFilingClient):
             response.append(data.text)
 
         for file, html in tqdm(zip(self.filings, response), desc='preprocessing data', total=len(self.filings)):
-            chunk_df, t_df, tab_df = await self.clean_data(html, self.ticker, file['form'], file['report_date'])
+            file_metadata = {
+                "company_name": self.ticker,
+                "form_type": file['form'],
+                "report_date": file['report_date']
+            }
+            chunk_df, t_df, tab_df = await self.clean_data(html, file_metadata)
             chunk_text.append(chunk_df)
             text.append(t_df)
             table.append(tab_df)
@@ -210,8 +224,8 @@ class SECAnalyzingClient(SECFilingClient):
             doc = Document(text=content, metadata=metadata)
             documents.append(doc)
 
-        self.vector_index = VectorStoreIndex(documents, embed_model=self.embedding)
-        self.retriver = VectorIndexRetriever(index=self.vector_index, similarity_top_k = 20)
+        #self.vector_index = VectorStoreIndex(documents, embed_model=self.embedder)
+        #self.retriver = VectorIndexRetriever(index=self.vector_index, similarity_top_k = 20)
 
     
     def to_csv(self, path_for_chunk_text: str = None, path_for_text: str = None, path_table: str = None):

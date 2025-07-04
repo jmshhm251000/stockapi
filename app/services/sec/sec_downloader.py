@@ -7,15 +7,17 @@ from typing import List
 import asyncio, httpx, backoff, aiofiles
 from app.config import settings
 
+
 CACHE_DIR = Path(settings.sec_cache_dir)
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
 
 class SecDownloader:
     """Download once, serve forever (until you invalidate the cache)."""
     def __init__(self, max_concurrency: int = 12):
         self.sem   = asyncio.Semaphore(max_concurrency)
         self.hdrs  = settings.headers
-        self._client: httpx.AsyncClient | None = None  # lazily created
+        self._client: httpx.AsyncClient | None = None
 
     async def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None:

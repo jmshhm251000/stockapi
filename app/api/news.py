@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Query, HTTPException, status
 from typing import List, Dict, Any
-from app.services.news_service import NewsService
+from app.services.news_parse import NewsService
 
 router = APIRouter()
 news_service = NewsService()

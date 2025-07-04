@@ -1,7 +1,9 @@
 """Batch embedder backed by Chroma (disk) or PGVector (optional)."""
 from pathlib import Path
+from llama_index.vector_stores.chroma import ChromaVectorStore
 import pandas as pd, chromadb
 from llama_index.core import Document, VectorStoreIndex
+from llama_index.core.retrievers import VectorIndexRetriever
 from app.config import settings
 
 
@@ -18,6 +20,7 @@ class SecEmbedder:
         return self._client.get_or_create_collection(f"sec_{cik.zfill(10)}")
 
     # ------------ public -------------
+    # TODO - ingestion logic needs modification
     def ingest_dataframe(self, cik: str, df: pd.DataFrame) -> None:
         col = self._col(cik)
         docs = [
@@ -36,4 +39,7 @@ class SecEmbedder:
         VectorStoreIndex.from_documents(docs, embed_model=self._embed, store=col)
 
     def retriever(self, cik: str, k: int = 20):
+        vector_store = ChromaVectorStore(chroma_collection=self._col(cik))
+        index     = VectorStoreIndex.from_vector_store(embed_model=self._embed, vector_store=vector_store)
+        sec_retriever = VectorIndexRetriever(index=index, similarity_top_k=5)
         return VectorStoreIndex.from_collection(self._col(cik)).as_retriever(k)
