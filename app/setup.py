@@ -70,7 +70,7 @@ def process_sync():
 
 
 def construct_db_llm():
-    embedding_model = OllamaEmbedding(model_name="nomic-embed-text", base_url="http://localhost:11434")
+    embedding_model = OllamaEmbedding(model_name="nomic-embed-text", base_url="http://localhost:11434", embed_batch_size=16)
     chroma_client = chromadb.PersistentClient(path=os.path.join(os.getcwd(), "buffett_db"))
     chroma_collection = chroma_client.get_or_create_collection(name="Warren_Buffett")
 

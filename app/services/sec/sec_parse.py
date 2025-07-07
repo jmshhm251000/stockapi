@@ -1,241 +1,161 @@
-from app.config import settings
-import pandas as pd
-import requests
-from tqdm import tqdm
-from bs4 import BeautifulSoup
-import regex as re
-from llama_index.core.node_parser import TokenTextSplitter
-from llama_index.core import VectorStoreIndex
-from llama_index.core.retrievers import VectorIndexRetriever
-from llama_index.core import Document
-from .sec_url import SECFilingClient
-from app.services.sec.sec_downloader import SecDownloader
-from app.services.sec.sec_embedder   import SecEmbedder
+from __future__ import annotations
+
 import asyncio
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
+from typing import List, Tuple
+import aiofiles
+import pandas as pd
+from llama_index.core import Document
+from app.config import settings
+from .sec_url import SECFilingClient
+from app.services.sec.sec_downloader import SECDownloader
+from app.services.sec.sec_embedder import SECEmbedder
+from .sec_data_process import clean_data
+
+import logging
+logger = logging.getLogger(__name__)
 
 
-headers = settings.headers
+HEADERS = settings.headers
 
 
 class SECParsingClient(SECFilingClient):
+    """
+    Parse SEC filings into page-, table-, and chunk-level dataframes and
+    push chunk Documents into the shared vector store.
+
+    Heavy HTML → text work is delegated to a ProcessPoolExecutor.
+    """
+
     _locks: dict[str, asyncio.Lock] = {}
 
-    def __init__(self, ticker: str, downloader: SecDownloader, embedder: SecEmbedder):
+    def __init__(
+        self,
+        ticker: str,
+        downloader: SECDownloader,
+        embedder: SECEmbedder,
+        process_pool: ProcessPoolExecutor,
+    ) -> None:
         super().__init__(ticker=ticker)
+        self.ticker = ticker
         self.downloader = downloader
         self.embedder = embedder
-        self.chunk_text_df = pd.DataFrame()
-        self.text_df = pd.DataFrame()
-        self.table_df = pd.DataFrame()
-        
-    
-    async def _ingest_if_needed(self):
+        self.pool: ProcessPoolExecutor = process_pool
+
+        self.filings: list[dict] = []
+
+        self.chunk_text_df: pd.DataFrame | None = None
+        self.text_df: pd.DataFrame | None = None
+        self.table_df: pd.DataFrame | None = None
+        self.chunk_docs: List[Document] | None = None
+
+
+    async def ingest(self) -> None:
+        """Public entry-point (idempotent)."""
+        logger.debug("🚀 ingest-called for %s", self.ticker)
+        await self._ingest_if_needed()
+
+    async def _ingest_if_needed(self) -> None:
         if self.embedder._col(self.cik).count() > 0:
             return
 
         lock = self._locks.setdefault(self.cik, asyncio.Lock())
         async with lock:
-            # TODO - continue
-            return
-        
+            if self.embedder._col(self.cik).count() > 0:
+                return
 
-    def _fill_filings(self):
+            self._fill_filings()
+            urls = [f["url"] for f in self.filings]
+            html_paths: List[Path] = await self.downloader.download_many(urls)
+
+            await self.parse_filings(html_paths)
+            self.embedder.add(self.cik, self.chunk_docs)
+
+
+    def _fill_filings(self) -> None:
         if self.filing_metadata.empty:
             raise ValueError("filing_metadata is empty. Fetch it first.")
-        
-        for i in tqdm(range(len(self.filing_metadata)), desc='Fetching Filings'):
+
+        for i in range(len(self.filing_metadata)):
             acc_no, doc, form, date = self._get_metadata(i)
-            self.filings.append({
-                "index": i,
-                "form": form,
-                "report_date": date,
-                "url": f"https://www.sec.gov/Archives/edgar/data/{self.cik}/{acc_no}/{doc}"
-            })
+            self.filings.append(
+                {
+                    "index": i,
+                    "form": form,
+                    "report_date": date,
+                    "url": f"https://www.sec.gov/Archives/edgar/data/{int(self.cik)}/{acc_no}/{doc}",
+                }
+            )
 
 
-    async def clean_text(self, text: str) -> str:
-        return text.replace("\n", " ").strip()
+    async def parse_filings(self, html_paths: List[Path]) -> None:
+        logger.info("📝 parsing %d html files for %s", len(html_paths), self.ticker)
+        async def _read(path: Path) -> str:
+            async with aiofiles.open(path, "r", encoding="utf-8") as f:
+                return await f.read()
 
-    def find_table_title(self, table):
-        parent_div = table.find_parent("div")
-        if parent_div:
-            prev_div = parent_div.find_previous_sibling("div")
-            if prev_div:
-                title_text = prev_div.get_text(strip=True)
-                if title_text:
-                    return title_text
-                else:
-                    prev_div = prev_div.find_previous_sibling("div")
-                if prev_div:
-                    return prev_div.get_text(strip=True)
-        return "No Title Found"
+        html_texts: List[str] = await asyncio.gather(*(_read(p) for p in html_paths))
 
-    async def clean_data(self, html: str, metadata: dict, chunk_size=512, chunk_overlap=50) -> pd.DataFrame:
-        soup = BeautifulSoup(html, "html.parser")
-        tables = soup.find_all("table")
-
-        structured_tables = []
-
-        for i, table in enumerate(tables):
-            table_title = self.find_table_title(table)
-
-            for x, tr in enumerate(table.find_all("tr")):
-                for y, data in enumerate(tr.find_all("td")):
-                    structured_tables.append({
-                        "company_name": metadata["company_name"],
-                        "form_type": metadata["form_type"],
-                        "date": metadata["report_date"],
-                        "table_number": i,
-                        "table_title": table_title,
-                        "row": x,
-                        "column": y,
-                        "data": data.get_text(strip=True)
-                    })
-
-
-        for table in tables:
-            for tr in table.find_all("tr"):
-                for data in tr.find_all("td"):
-                    data.decompose()
-
-        pages_and_texts = []
-        page_number = 0
-        current_page = []
-        text_cleaning_tasks = []
-
-        for element in soup.body.children:
-            if element.name == "hr":
-                if text_cleaning_tasks:  # Ensure we have tasks to process
-                    texts_list = await asyncio.gather(*text_cleaning_tasks)
-                    texts = " ".join(texts_list).strip()
-                    if texts:  # Ensure texts are not empty
-                        pages_and_texts.append({
-                            "company_name": metadata["company_name"],
-                            "form_type": metadata["form_type"],
-                            "date": metadata["report_date"],
-                            "page_number": page_number,
-                            "page_char_count": len(texts),
-                            "page_word_count": len(texts.split()),
-                            "page_sentence_count_raw": len(texts.split(". ")),
-                            "page_token_count": len(texts) / 4,
-                            "content": re.sub(r"\s*\d+\s*$", "", texts.strip())
-                        })
-                        page_number += 1
-
-                # Reset lists after an HR tag
-                current_page = []
-                text_cleaning_tasks = []
-
-            else:
-                text_content = element.get_text(" ", strip=True)
-                if text_content.strip():  # Only process non-empty text
-                    text_cleaning_tasks.append(asyncio.create_task(self.clean_text(text_content)))
-                    current_page.append(text_content)  # Ensure text is tracked
-
-        # Add the last page if there's remaining content
-        if current_page:
-            texts = " ".join(await asyncio.gather(*text_cleaning_tasks)).strip()
-            pages_and_texts.append({
-                "company_name": metadata["company_name"],
-                "form_type": metadata["form_type"],
-                "date": metadata["report_date"],
-                "page_number": page_number,
-                "page_char_count": len(texts),
-                "page_word_count": len(texts.split()),
-                "page_sentence_count_raw": len(texts.split(". ")),
-                "page_token_count": len(texts) / 4,
-                "content": re.sub(r"\s*\d+\s*$", "", texts.strip())
-            })
-
-        text_df = pd.DataFrame(pages_and_texts)
-        table_df = pd.DataFrame(structured_tables)
-
-        text_df = text_df.iloc[1:].reset_index(drop=True)
-        text_df["content"] = text_df["content"].replace("", None)
-        text_df.dropna(subset=["content"], inplace=True)
-        text_df.reset_index(drop=True, inplace=True)
-
-        splitter = TokenTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-
-        split_content = []
-        chunk_processing_tasks = []
-
-        for _, row in text_df.iterrows():
-            chunk_processing_tasks.append(asyncio.to_thread(splitter.split_text, row["content"]))
-
-        chunk_results = await asyncio.gather(*chunk_processing_tasks)
-
-        for row, chunks in zip(text_df.iterrows(), chunk_results):
-            for chunk in chunks:
-                split_content.append({
-                    "company_name": metadata["company_name"],
-                    "form_type": metadata["form_type"],
-                    "date": metadata["report_date"],
-                    "page_number": row[1]["page_number"],
-                    "chunk_char_count": len(chunk),
-                    "chunk_word_count": len(chunk.split()),
-                    "chunk_sentence_count_raw": len(chunk.split(". ")),
-                    "chunk_token_count": len(chunk) / 4,
-                    "content_chunk": chunk
-                })
-
-        chunk_text_df = pd.DataFrame(split_content)
-
-        return chunk_text_df, text_df, table_df
-
-
-    async def parse_filings(self):
-        chunk_text = []
-        text = []
-        table = []
-        response = []
-
-        for file in tqdm(self.filings, desc='fetching response from url'):
-            data = requests.get(file['url'], headers=headers)
-            response.append(data.text)
-
-        for file, html in tqdm(zip(self.filings, response), desc='preprocessing data', total=len(self.filings)):
-            file_metadata = {
-                "company_name": self.ticker,
-                "form_type": file['form'],
-                "report_date": file['report_date']
-            }
-            chunk_df, t_df, tab_df = await self.clean_data(html, file_metadata)
-            chunk_text.append(chunk_df)
-            text.append(t_df)
-            table.append(tab_df)
-
-        self.chunk_text_df = pd.concat(chunk_text)
-        self.text_df = pd.concat(text)
-        self.table_df = pd.concat(table)
-
-        documents = []
-
-        for _, row in self.chunk_text_df.iterrows():
-            content = row["content_chunk"]
+        tasks: List[asyncio.Task] = []
+        ticker = self.ticker
+        for filing, html in zip(self.filings, html_texts, strict=True):
+            assert isinstance(html, str)
             metadata = {
-                "company_name": row.get("company_name", ""),
-                "form_type": row.get("form_type", ""),
-                "date": row.get("date", ""),
-                "page_number": row.get("page_number", 0),
-                "chunk_word_count": row.get("chunk_word_count", 0),
-                "chunk_token_count": row.get("chunk_token_count", 0)
+                "company_name": ticker,
+                "form_type": filing["form"],
+                "report_date": filing["report_date"],
             }
-            doc = Document(text=content, metadata=metadata)
-            documents.append(doc)
+            assert isinstance(metadata, dict)
+            tasks.append(self.async_clean_data(html, metadata=metadata, executor=self.pool))
 
-        #self.vector_index = VectorStoreIndex(documents, embed_model=self.embedder)
-        #self.retriver = VectorIndexRetriever(index=self.vector_index, similarity_top_k = 20)
+        results: List[Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]] = await asyncio.gather(*tasks)
 
-    
-    def to_csv(self, path_for_chunk_text: str = None, path_for_text: str = None, path_table: str = None):
-        if not path_for_chunk_text:
-            self.chunk_text_df.to_csv(f"{path_for_chunk_text}")
-        if not path_for_text:
-            self.text_df.to_csv(f"{path_for_text}")
-        if not path_table:
-            self.table_df.to_csv(f"{path_table}")
+        chunk_dfs, text_dfs, table_dfs = zip(*results)
+        self.chunk_text_df = pd.concat(chunk_dfs, ignore_index=True)
+        self.text_df = pd.concat(text_dfs, ignore_index=True)
+        self.table_df = pd.concat(table_dfs, ignore_index=True)
 
-        self.chunk_text_df.to_csv("chunk_text.csv")
-        self.text_df.to_csv("text.csv")
-        self.table_df.to_csv("table.csv")
+        self.chunk_docs = [
+            Document(
+                text=row["content_chunk"],
+                metadata={
+                    "company_name": row["company_name"],
+                    "form_type": row["form_type"],
+                    "date": row["date"],
+                    "page_number": row["page_number"],
+                    "chunk_word_count": row.get("chunk_word_count", 0),
+                    "chunk_token_count": row.get("chunk_token_count", 0),
+                },
+            )
+            for _, row in self.chunk_text_df.iterrows()
+        ]
+        logger.info("✅ parsed %s — %d chunks", self.ticker, len(self.chunk_docs))
+
+
+    async def async_clean_data(
+        self,
+        html: str,
+        metadata: dict,
+        executor: ProcessPoolExecutor,
+        chunk_size: int = 512,
+        chunk_overlap: int = 50,
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            executor, clean_data, html, metadata, chunk_size, chunk_overlap
+        )
+
+
+    def to_csv(
+        self,
+        chunk_text_path: str | None = None,
+        text_path: str | None = None,
+        table_path: str | None = None,
+    ) -> None:
+        if self.chunk_text_df is None:
+            raise RuntimeError("Call `parse_filings` first.")
+
+        self.chunk_text_df.to_csv(chunk_text_path or "chunk_text.csv", index=False)
+        self.text_df.to_csv(text_path or "text.csv", index=False)
+        self.table_df.to_csv(table_path or "table.csv", index=False)

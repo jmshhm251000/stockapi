@@ -2,6 +2,7 @@ import os
 import pandas as pd
 from fastapi import Depends, Request
 from .sec_parse import SECParsingClient
+from .sec_summary import SECSummaryClient
 
 
 def load_ticker_json():
@@ -55,9 +56,20 @@ def get_llm(request: Request):
 def get_wb_retriever(request: Request):
     return request.app.state.wb_retriever
 
+def get_process_pool(request: Request):
+    return request.app.state.process_pool
+
 def parsing_client_factory(
     ticker: str,
     downloader = Depends(get_downloader),
     embedder   = Depends(get_embedder),
+    process_pool = Depends(get_process_pool)
     ) -> SECParsingClient:
-    return SECParsingClient(ticker, downloader, embedder)
+    return SECParsingClient(ticker, downloader, embedder, process_pool)
+
+def summary_client_factory(
+    ticker: str,
+    llm = Depends(get_llm),
+    embedder = Depends(get_embedder)
+    ) -> SECSummaryClient:
+    return SECSummaryClient(ticker, llm, embedder)

@@ -1,7 +1,9 @@
-from fastapi import APIRouter, status, Query
+from fastapi import APIRouter, status, Query, Depends, BackgroundTasks
 from fastapi.responses import JSONResponse
 from typing import List, Dict
 from app.services.sec.sec_url import update_company_tickers_json, find_cik, SECFilingClient
+from app.services.sec.sec_parse import SECParsingClient
+from app.services.sec.sec_utils import parsing_client_factory
 
 
 router = APIRouter()
@@ -68,3 +70,13 @@ def get_sec_doc_urls(
             content={"error": str(e)},
             status_code=status.HTTP_400_BAD_REQUEST
         )
+
+
+@router.post("/ingest/{ticker}", status_code=status.HTTP_202_ACCEPTED, summary="Download + embed latest SEC filings for a ticker")
+async def ingest_sec_filings(ticker: str, background: BackgroundTasks, client: SECParsingClient = Depends(parsing_client_factory)):
+    background.add_task(client.ingest)
+    return {
+        "ticker": ticker.upper(),
+        "cik": client.cik,
+        "message": "Ingestion scheduled – check /metrics or ChromaDB for progress."
+    }

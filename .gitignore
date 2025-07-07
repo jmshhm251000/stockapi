@@ -8,3 +8,5 @@ sec_db/
 data/
 llm.py
 .vscode/
+.env
+logs/

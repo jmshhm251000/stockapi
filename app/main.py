@@ -9,9 +9,14 @@ from app.api.routes import api_router
 from .setup import construct_db_llm
 from .services.sec.sec_downloader import SecDownloader
 from .services.sec.sec_embedder import SecEmbedder
+from concurrent.futures import ProcessPoolExecutor
 
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.logging import init_logging
+
+
+init_logging("INFO")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -22,6 +27,7 @@ async def lifespan(app: FastAPI):
 
     app.state.downloader = SecDownloader()
     app.state.embedder   = SecEmbedder(embed_model)
+    app.state.process_pool = ProcessPoolExecutor(max_workers=2)
 
 
     reg = Registry()
@@ -35,6 +41,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await app.state.downloader.aclose()
+        app.state.process_pool.shutdown(wait=True)
 
 app = FastAPI(lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
