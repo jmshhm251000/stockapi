@@ -59,6 +59,9 @@ def get_wb_retriever(request: Request):
 def get_process_pool(request: Request):
     return request.app.state.process_pool
 
+def get_semaphore(request: Request):
+    return request.app.state.sem
+
 def parsing_client_factory(
     ticker: str,
     downloader = Depends(get_downloader),
@@ -70,6 +73,8 @@ def parsing_client_factory(
 def summary_client_factory(
     ticker: str,
     llm = Depends(get_llm),
-    embedder = Depends(get_embedder)
+    embedder = Depends(get_embedder),
+    wb_retriever = Depends(get_wb_retriever),
+    semaphore = Depends(get_semaphore)
     ) -> SECSummaryClient:
-    return SECSummaryClient(ticker, llm, embedder)
+    return SECSummaryClient(ticker, llm, embedder, wb_retriever, semaphore)

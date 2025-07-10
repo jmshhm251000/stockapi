@@ -9,7 +9,7 @@ def clean_data(
         html: str,
         metadata: dict,
         chunk_size: int = 512,
-        chunk_overlap: int = 50,
+        chunk_overlap: int = 20,
     ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     soup = BeautifulSoup(html, "html.parser")
     tables = soup.find_all("table")

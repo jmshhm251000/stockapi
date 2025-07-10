@@ -12,6 +12,7 @@ from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.core import SimpleDirectoryReader, Document
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.llms.llama_cpp import LlamaCPP
+from pathlib import Path
 
 
 def process_row_sync_csv(row, sllm):
@@ -76,7 +77,7 @@ def construct_db_llm():
 
     vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
 
-    if chroma_collection.count() == 0:
+    if chroma_collection.count() == 1:
         docs = process_sync()
 
         texts = [doc.text for doc in docs]
@@ -84,7 +85,7 @@ def construct_db_llm():
 
         # Prepare metadata and unique IDs
         metadatas = [doc.metadata for doc in docs]
-        ids = [str(uuid.uuid4()) for _ in docs]
+        ids = [str(uuid.uuid5()) for _ in docs]
 
         # Add documents to the Chroma collection
         chroma_collection.add(
@@ -96,20 +97,20 @@ def construct_db_llm():
 
     index = VectorStoreIndex.from_vector_store(embed_model=embedding_model, vector_store=vector_store)
 
-    retriever = VectorIndexRetriever(index=index, similarity_top_k=5)
-
+    retriever = VectorIndexRetriever(index=index, similarity_top_k=6)
+    print("CWD:", Path.cwd())
     llm = LlamaCPP(
-        model_path="D:\\Dev\\Cpp\\my_app\\model\\DeepSeek-R1-Distill-Llama-8B-Q4_K_M.gguf",
+        model_path= str(Path.cwd() / "DeepSeek-R1-Distill-Llama-8B-Q4_K_M.gguf"),
         model_kwargs={
-            "n_gpu_layers": 30,       # push most layers to GPU (your 3080 has ~10 GB usable VRAM)
-            "n_ctx": 32768,           # safe high-context size that fits in RAM/GPU
-            "n_threads": 12,          # ~number of physical CPU threads
-            "n_batch": 512,           # adjust based on prompt length
-            "main_gpu": 0,            # ensure it uses your main GPU
+            "n_gpu_layers": 22,       # push most layers to GPU (your 3080 has ~10 GB usable VRAM)
+            "n_ctx": 8192,           # safe high-context size that fits in RAM/GPU
+            "n_threads": 8,          # ~number of physical CPU threads
+            "n_batch": 320,           # adjust based on prompt length
+            "main_gpu": 1,            # ensure it uses your main GPU
         },
-        temperature=0.1,
-        max_new_tokens=1024,
-        context_window=32768,
+        temperature=1,
+        max_new_tokens=1500,
+        context_window=32769,
         verbose=False,
     )
 

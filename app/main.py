@@ -7,10 +7,10 @@ from aioprometheus.asgi.starlette import metrics
 
 from app.api.routes import api_router
 from .setup import construct_db_llm
-from .services.sec.sec_downloader import SecDownloader
-from .services.sec.sec_embedder import SecEmbedder
+from .services.sec.sec_downloader import SECDownloader
+from .services.sec.sec_embedder import SECEmbedder
 from concurrent.futures import ProcessPoolExecutor
-
+from asyncio import Semaphore
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.logging import init_logging
@@ -24,9 +24,10 @@ async def lifespan(app: FastAPI):
     app.state.embedding_model = embed_model
     app.state.wb_retriever    = wb_retriever
     app.state.llm             = llm
+    app.state.sem            = Semaphore(2)
 
-    app.state.downloader = SecDownloader()
-    app.state.embedder   = SecEmbedder(embed_model)
+    app.state.downloader = SECDownloader()
+    app.state.embedder   = SECEmbedder(embed_model)
     app.state.process_pool = ProcessPoolExecutor(max_workers=2)
 
 
